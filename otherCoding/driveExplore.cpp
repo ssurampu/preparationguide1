@@ -9,10 +9,10 @@
 #include <algorithm>
 #include <rpc.h>
 #include <limits>
+#include <regex>
 
-#define min(x,y) ((x) > (y) ? (x) : (y))
-#define min(x,y) ((x) < (y) ? (x) : (y))
-
+//#define min(x,y) ((x) < (y) ? (x) : (y))
+std::wstring g_nvmePartitionGuid =  L"{44B59590-EE00-400A-0980-83031921020F}";
 
 std::wstring g_InputGUID;
 typedef struct _LBA_MAP_STRUCT {
@@ -45,7 +45,11 @@ struct CommandLineOptions {
     std::wstring createPartition;
     std::wstring createPartitionWithGuid;
     std::wstring size;
+    std::wstring hasNtfs;
+    std::wstring partitionGuidType;
+    std::wstring generateGuid;
 };
+GUID StringToGUID(const std::wstring& guidString);
 
 // Lambda function to check if a string starts with a prefix
 //auto startsWith = [](const std::wstring& str, const std::wstring& prefix) {
@@ -70,6 +74,7 @@ auto startsWith = [](const std::wstring& str, const std::wstring& prefix) {
 void PrintCommandLineOptions(const CommandLineOptions& options) {
     std::wcout << L"driveNo: " << options.driveNo << std::endl;
     std::wcout << L"guid: " << options.guid << std::endl;
+    std::wcout << L"partitionGuidType: " << options.partitionGuidType << std::endl;
     std::wcout << L"partitionNo: " << options.partitionNo << std::endl;
     std::wcout << L"readWrite: " << options.readWrite << std::endl;
     std::wcout << L"filePath: " << options.filePath << std::endl;
@@ -82,23 +87,25 @@ void PrintCommandLineOptions(const CommandLineOptions& options) {
     std::wcout << L"createPartition " << options.createPartition << std::endl;
     std::wcout << L"createPartitionWithGuid " << options.createPartitionWithGuid << std::endl;
     std::wcout << L"size " << options.size << std::endl;
+    std::wcout << L"hasNtfs " << options.hasNtfs << std::endl;
+    std::wcout << L"hasNtfs " << options.generateGuid << std::endl;
 }
 
 // Function to display usage instructions
 void DisplayUsage() {
     std::wcout << L"Usage: driveExplore.exe [-DriveNo <drive_number>] " << std::endl
-                << L" [-guid <guid>]" << std::endl
-                << L" [-PartitionNo <partition_number>]" << std::endl
-                << L" [-readwrite <0 / 1>]" << std::endl
-                << L" [-filePath <file path> ]" << std::endl
-                << L" [-listDrives]" << std::endl
+               // << L" [-PartitionNo <partition_number>]" << std::endl
+                //<< L" [-readwrite <0 / 1>]" << std::endl
+                //<< L" [-filePath <file path> ]" << std::endl
+                << L" [-listDrives] [-driveNo <drive no]" << std::endl
+                << L" [-hasNtfs] [-driveNo <drive no]" << std::endl
                 << L" [-listAllPartitions]" << std::endl
-                << L" [-listPartitions]" << std::endl
+                << L" [-listPartitions] [-driveNo <drive no>]" << std::endl
                 << L" [-drivesGeometry]" << std::endl
-                << L" [-initDrive]" << std::endl
+                << L" [-initDrive] [-driveNo <drive no>]" << std::endl
                 << L" [-createPartition] [-size <size>] [-driveNo <drive no>]" << std::endl
-                << L" [-createPartitionWithGuid] [-guid <guid>] [-size] [-driveNo <drive no>]" << std::endl
-                << L" [-size]" << std::endl
+                << L" [-createPartitionWithGuid] [-guid <guid>] [-size] [-driveNo <drive no>] [-partitionGuidType <Guid Type>]" << std::endl
+                << L" [-generateGuid]" << std::endl
                 << std::endl;
 }
 
@@ -116,9 +123,11 @@ bool ParseCommandLineOptions(int argc, wchar_t* argv[], CommandLineOptions &opti
     options.driveNo = L"-1";
     options.guid = L"-1";
     options.createPartitionWithGuid = L"0";
+    options.hasNtfs = L"0";
+    options.partitionGuidType = L"-1";
+    options.generateGuid = L"-1";
 
     std::vector<std::wstring> args(argv, argv + argc);
-    std::cerr << "args count" << argc << std::endl;
 
     if (argc == 1 || startsWith(args[0], L"-help")) {
         DisplayUsage();
@@ -145,6 +154,17 @@ bool ParseCommandLineOptions(int argc, wchar_t* argv[], CommandLineOptions &opti
             }
             else {
                 std::cerr << "Error: Missing GUID for -guid." << std::endl;
+                DisplayUsage();
+                return false;
+            }
+        }
+        else if (startsWith(args[i], L"-partitionGuidType")) {
+            if (i + 1 < args.size()) {
+                options.partitionGuidType = args[i + 1];
+                ++i;
+            }
+            else {
+                std::cerr << "Error: Missing GUID for -partitionGuidType." << std::endl;
                 DisplayUsage();
                 return false;
             }
@@ -213,12 +233,23 @@ bool ParseCommandLineOptions(int argc, wchar_t* argv[], CommandLineOptions &opti
         else if (startsWith(args[i], L"-createPartition")) {
             options.createPartition = L"1";
         }
+        else if (startsWith(args[i], L"-hasNtfs")) {
+            options.hasNtfs = L"1";
+        }
+        else if (startsWith(args[i], L"-generateGuid")) {
+            options.generateGuid = L"1";
+        }
         else if (startsWith(args[i], L"-help")) {
             DisplayUsage();
             exit(0);
         }
     }
 
+    if (options.hasNtfs == L"1" && options.driveNo == L"-1") {
+        std::cerr << "Error: Missing -driveNo for  -hasNtfs." << std::endl;
+        DisplayUsage();
+        return false;
+    }
     if (options.listPartitions == L"1" && options.driveNo == L"-1") {
         std::cerr << "Error: Missing -driveNo for  -listPartitions." << std::endl;
         DisplayUsage();
@@ -233,7 +264,7 @@ bool ParseCommandLineOptions(int argc, wchar_t* argv[], CommandLineOptions &opti
 
     if (options.createPartitionWithGuid == L"1") {
         if (options.guid == L"-1" || options.size == L"-1" || options.driveNo == L"-1") {
-            std::cerr << "Error: Size should be >= 0 for -size and proper drive number -driveNo should be given. " << std::endl;
+            std::cerr << "Error: Size should be >= 0 for -size and proper drive number -driveNo should be given. And -guid should be used to assign guid for new partition. " << std::endl;
             DisplayUsage();
             return false;
         }
@@ -767,6 +798,133 @@ HRESULT GetDiskPartitions(const std::wstring& physicalDrivePath, PDRIVE_LAYOUT_I
     return hr;
 }
 
+bool HasNtfsPartition(std::wstring partitionPath)
+{
+    std::wcout << "HasNtfsPartition received partition path :" << partitionPath << std::endl;
+    bool ntfsFound = false;
+    HANDLE hPartition = CreateFileW(partitionPath.c_str(),
+        GENERIC_READ,
+        FILE_SHARE_READ | FILE_SHARE_WRITE,
+        NULL,
+        OPEN_EXISTING,
+        0,
+        NULL);
+    if (hPartition == INVALID_HANDLE_VALUE) {
+        std::wcout <<"Unable to open partition path " << partitionPath << std::endl;
+        return ntfsFound;
+    }
+    if (hPartition != INVALID_HANDLE_VALUE) {
+        // Get the file system name
+        WCHAR fileSystemName[MAX_PATH] = { 0 };
+        if (GetVolumeInformationByHandleW(hPartition,
+            NULL,
+            0,
+            NULL,
+            NULL,
+            NULL,
+            fileSystemName,
+            MAX_PATH)) {
+            std::wcout << "Filesystem name " << fileSystemName << std::endl;
+            if (wcscmp(fileSystemName, L"NTFS") == 0) {
+                ntfsFound = true;
+            }
+        }
+    }
+    CloseHandle(hPartition);
+
+    return ntfsFound;
+
+}
+
+HRESULT PhysicalDriveHasNtfs(const std::wstring& physicalDrivePath, bool &hasNtfs)
+{
+    hasNtfs = false;
+    std::wcout << "In GetPartitionsInfo1 " << std::endl;
+    HANDLE hDevice = CreateFile(
+        physicalDrivePath.c_str(),
+        GENERIC_READ,
+        FILE_SHARE_READ | FILE_SHARE_WRITE,
+        nullptr,
+        OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL,
+        nullptr
+    );
+
+    if (hDevice == INVALID_HANDLE_VALUE) {
+        std::wcerr << L"Failed to open device. Error code: " << GetLastError() << std::endl;
+        return HRESULT_FROM_WIN32(GetLastError());
+    }
+    std::wcout << "successfully opened physical Drive path " << physicalDrivePath << std::endl;
+
+    DWORD bytesReturned = 0;
+    SIZE_T driveLayoutSize = sizeof(DRIVE_LAYOUT_INFORMATION_EX) + 1024;
+
+    DRIVE_LAYOUT_INFORMATION_EX* driveLayout = (DRIVE_LAYOUT_INFORMATION_EX*)HeapAlloc(GetProcessHeap(), 0, driveLayoutSize);
+    if (driveLayout == NULL) {
+        std::wcout << "Unable to allocate memory for driveLayout" << std::endl;
+        return E_OUTOFMEMORY;
+    }
+    ZeroMemory(driveLayout, driveLayoutSize);
+
+    if (!DeviceIoControl(
+        hDevice,
+        IOCTL_DISK_GET_DRIVE_LAYOUT_EX,
+        nullptr,
+        0,
+        driveLayout,
+        sizeof(DRIVE_LAYOUT_INFORMATION_EX) + 1024,
+        &bytesReturned,
+        nullptr
+    )) {
+        std::wcerr << L"Failed to get drive layout. Error code: " << GetLastError() << std::endl;
+        CloseHandle(hDevice);
+        return HRESULT_FROM_WIN32(GetLastError());
+    }
+    std::wcout << "successfully got DRIVE_LAYOUT_INFORMATION_EX byes returned : " << bytesReturned << std::endl;
+
+    DRIVE_LAYOUT_INFORMATION_EX* pDriveLayout = driveLayout;
+    ULONGLONG sectorSize = GetDiskSectorSize(physicalDrivePath);
+    std::wcout << "Sector size  " << sectorSize << std::endl;
+    for (DWORD partitionNumber = 0; partitionNumber < pDriveLayout->PartitionCount; ++partitionNumber) {
+        PARTITION_INFORMATION_EX& partitionInfo = pDriveLayout->PartitionEntry[partitionNumber];
+        if (partitionInfo.PartitionStyle == PARTITION_STYLE_GPT) {
+            std::wstring partition_basic_data = L"{ebd0a0a2-b9e5-4433-87c0-68b6b72699c7}";
+            GUID partition_basic_data_guid = StringToGUID(partition_basic_data);
+
+            if (IsEqualGUID(partitionInfo.Gpt.PartitionType, partition_basic_data_guid)) {
+
+                std::wcout << "Got a GPT partition" << std::endl;
+                std::wstring partitionPath = L"\\\\?\\Volume" + GUIDToString(partitionInfo.Gpt.PartitionId);
+                hasNtfs = HasNtfsPartition(partitionPath);
+                if (hasNtfs) {
+                    std::wcout << " physical Drive:" << physicalDrivePath << " Has NTFS with partition " << partitionPath << std::endl;
+                    CloseHandle(hDevice);
+                    return S_OK;
+                }
+            }
+        }
+        else if (partitionInfo.PartitionStyle == PARTITION_STYLE_MBR) {
+
+            if (partitionInfo.Mbr.PartitionType != PARTITION_ENTRY_UNUSED)
+            {
+                std::wcout << "Got a MBR partition" << std::endl;
+                // Check for NTFS partition
+                std::wstring partitionPath = L"\\\\?\\Volume" + GUIDToString(partitionInfo.Mbr.PartitionId);
+                hasNtfs = HasNtfsPartition(partitionPath);
+                if (hasNtfs) {
+                    std::wcout << " physical Drive:" << physicalDrivePath <<" Has NTFS with partition "<< partitionPath << std::endl;
+                    CloseHandle(hDevice);
+                    return S_OK;
+                }
+            }
+        }
+
+
+    }
+
+    CloseHandle(hDevice);
+    return S_OK;
+}
 
 HRESULT GetPartitionsInfo1(const std::wstring& physicalDrivePath, std::vector<PartitionInfo>& partitionsList) 
 {
@@ -835,6 +993,29 @@ HRESULT GetPartitionsInfo1(const std::wstring& physicalDrivePath, std::vector<Pa
         info.startingLBA = partitionInfo.StartingOffset.QuadPart;
 
         partitionsList.push_back(info);
+        if (partitionInfo.PartitionStyle == PARTITION_STYLE_GPT) {
+            std::wstring partition_basic_data = L"{ebd0a0a2-b9e5-4433-87c0-68b6b72699c7}";
+            GUID partition_basic_data_guid = StringToGUID(partition_basic_data);
+            if (IsEqualGUID(partitionInfo.Gpt.PartitionType, partition_basic_data_guid)) {
+                std::wstring partitionPath = L"\\\\?\\Volume" + GUIDToString(partitionInfo.Gpt.PartitionId);
+                bool hasNtfs = HasNtfsPartition(partitionPath);
+                if (hasNtfs) {
+                    std::wcout << " physical Drive path has ntfs partition" << physicalDrivePath << std::endl;
+                }
+            }
+        }else if (partitionInfo.PartitionStyle == PARTITION_STYLE_MBR) {
+            if (partitionInfo.Mbr.PartitionType != PARTITION_ENTRY_UNUSED)
+            {
+                // Check for NTFS partition
+                std::wstring partitionPath = L"\\\\?\\Volume" + GUIDToString(partitionInfo.Mbr.PartitionId);
+                bool hasNtfs = HasNtfsPartition(partitionPath);
+                if (hasNtfs) {
+                    std::wcout << " physical Drive path has ntfs partition" << physicalDrivePath << std::endl;
+                }
+            }
+        }
+        
+        
     }
 
     CloseHandle(hDevice);
@@ -951,6 +1132,7 @@ void DoIOToPhysicalDrive(std::wstring physicalDrivePath, ULONGLONG startingLBA, 
 
     CloseHandle(hDevice);
 }
+
 int GetPartitionInfoFromPhysicalPath(std::wstring physicalDrivePath, int readWrite)
 {
     std::vector<PartitionInfo> partitions;
@@ -1304,7 +1486,7 @@ HRESULT CreateGPTDisk(HANDLE deviceHandle)
         std::wcout << "Failed to flush after creating new disk partition " << hr << std::endl;
         return hr;
     }
-    
+    return hr;
 }
 
 bool CreateGptPartition(
@@ -1333,7 +1515,6 @@ bool CreateGptPartition(
         std::wcerr << L"Failed to open device. Error code: " << GetLastError() << std::endl;
         return false;
     }
-
 
     hr = GetDiskPartitions(drivePath, &partitionLayout);
     if (hr != S_OK) {
@@ -1373,7 +1554,7 @@ bool CreateGptPartition(
     }
 
     newPartitionNumber++;
-
+    
     // Make sure the partition table is not full.
     if (newPartitionOffset >= (ULONG64)partitionLayout->Gpt.UsableLength.QuadPart) {
         hr = ERROR_DISK_FULL;
@@ -1382,7 +1563,7 @@ bool CreateGptPartition(
     }
 
     ULONG64 maxPartitionSize = (ULONG64)partitionLayout->Gpt.UsableLength.QuadPart - newPartitionOffset;
-    newpartitionSize = min(newpartitionSize, maxPartitionSize);
+    newpartitionSize = min(newpartitionSize, static_cast<LONGLONG>(maxPartitionSize));
 
     memcpy(newPartitionLayout, partitionLayout, partitionLayoutSize);
     newPartitionLayout->PartitionCount = newPartitionCount;
@@ -1393,6 +1574,7 @@ bool CreateGptPartition(
     newPartitionLayout->PartitionEntry[newPartitionIndex].PartitionStyle = PARTITION_STYLE_GPT;
     newPartitionLayout->PartitionEntry[newPartitionIndex].RewritePartition = 1;
     newPartitionLayout->PartitionEntry[newPartitionIndex].Gpt.PartitionId  = partitionId;
+    newPartitionLayout->PartitionEntry[newPartitionIndex].Gpt.PartitionType = partitionType;
     wcscpy_s(newPartitionLayout->PartitionEntry[newPartitionIndex].Gpt.Name, partitionName.c_str());
 
     newPartitionLayout->PartitionEntry[newPartitionIndex].Gpt.Attributes = attributes;
@@ -1425,7 +1607,7 @@ bool CreateGptPartition(
         return false;
     }
 
-
+    std::wcout << "newPartitionNumber " << newPartitionNumber << " newPartitionOffset: " << newPartitionOffset << " newpartitionSize: " << newpartitionSize << std::endl;
     CloseHandle(hDevice);
     if (partitionLayout) {
         HeapFree(GetProcessHeap(), 0, partitionLayout);
@@ -1522,17 +1704,115 @@ std::wstring DetectDriveType(const std::wstring& drivePath) {
     }
 }
 
-int wmain(int argc, wchar_t* argv[]) {
+void GetDiskNoAndGUID(std::wstring deviceName)
+{
+    
+    HANDLE diskHandle = CreateFile(
+        deviceName.c_str(),
+        GENERIC_READ,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        NULL,
+        OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL,
+        NULL
+    );
+    if (INVALID_HANDLE_VALUE == diskHandle) {
+        wprintf(L"cannot open the deviceName %d \n", GetLastError());
+        return;
+    }
+    STORAGE_DEVICE_NUMBER_EX deviceNumber = { 0 };
+    deviceNumber.Version = sizeof(STORAGE_DEVICE_NUMBER_EX);
+    deviceNumber.Size = sizeof(STORAGE_DEVICE_NUMBER_EX);
+    ULONG bytesReturned;
+    BOOL success;
 
+    success = DeviceIoControl(
+        diskHandle,
+        IOCTL_STORAGE_GET_DEVICE_NUMBER_EX,
+        NULL,
+        0,
+        &deviceNumber,
+        sizeof(deviceNumber),
+        &bytesReturned,
+        NULL
+    );
+    if (!success) {
+        wprintf(L"ioctl failed unable to get device no and guid %d\n", GetLastError());
+        return;
+    }
+    wprintf(L"Given devicepath : %ls DiskGuid:  %ls DriveNo: %d", deviceName.c_str(), GUIDToString(deviceNumber.DeviceGuid).c_str(), deviceNumber.DeviceNumber);
+    std::wcout << "Disk guid : " << GUIDToString(deviceNumber.DeviceGuid) << std::endl;
+    std::wcout << "Disk number : " << deviceNumber.DeviceNumber << std::endl;
+
+}
+bool ExtractDriveNumber(const std::wstring& drivePath, ULONGLONG& driveNumber) {
+    // Regular expression to match L"\\.\PhysicalDriveX" where X is a number
+    std::wregex drivePattern(LR"(\\\\\.\\PhysicalDrive(\d+))");
+    std::wsmatch match;
+
+    if (std::regex_match(drivePath, match, drivePattern)) {
+        driveNumber = std::stoull(match[1].str()); // Convert extracted number
+        return true;
+    }
+
+    return false; // Invalid format
+}
+
+int wmain(int argc, wchar_t* argv[]) {
+    /*
+    ULONGLONG driveNum;
+    if (ExtractDriveNumber(LR"(\\.\PhysicalDrive912345678123)", driveNum)) {
+        std::wcout << L"Extracted drive number: " << driveNum << std::endl;
+    }
+    else {
+        std::wcout << L"Failed to extract drive number" << std::endl;
+    }
+    if (1) {
+        return 0;
+    }
+    */
+
+    //std::wstring deviceName = L"\\\\?\\scsi#disk&ven_nvme&prod_samsung_mzel215t#5&1558641&0&000000#{53f56307-b6bf-11d0-94f2-00a0c91efb8b}";
+    //std::wstring deviceName = L"\\\\.\\PhysicalDrive6";
+    //GetDiskNoAndGUID(deviceName);
+    
     HRESULT hr = S_OK;
     CommandLineOptions cops;
     bool result = ParseCommandLineOptions(argc, argv, cops);
-    PrintCommandLineOptions(cops);
+    //PrintCommandLineOptions(cops);
     if (!result) {
         return -1;
     }
     
-
+    if (cops.generateGuid == L"1") {
+        GUID inputGuid;
+        hr = GetANewGuid(inputGuid);
+        if (hr != S_OK) {
+            std::wcout << "Unable to generate a guid Error: " << GetLastError();
+            return -1;
+        }
+        std::wcout << GUIDToString(inputGuid) << std::endl;
+        return 0;
+    }
+    if (cops.hasNtfs == L"1") {
+        std::wstring physicalDrivePath = L"\\\\.\\PHYSICALDRIVE" + cops.driveNo;
+        bool hasNtfs = false;
+        HRESULT hr = PhysicalDriveHasNtfs(physicalDrivePath, hasNtfs);
+        if (SUCCEEDED(hr)) {
+            if (hasNtfs) {
+                std::wcout << "Given Physical drive has NTFS partition DrieNo: "<< cops.driveNo << std::endl;
+            }
+            else {
+                std::wcout << "No NTFS partition fount on DrieNo: " << cops.driveNo << std::endl;
+            }
+            
+            return 0;
+        }
+        else {
+            std::wcout << "Unable to check if NTFS partition present on DrieNo: " << cops.driveNo << std::endl;
+            return -1;
+        }
+    }
     //std::wstring localFilePath = L"E:\\notes.txt";
     //std::wstring physicalDiskPath = GetPhysicalDiskPath(localFilePath.substr(0,2));
     //doFileOperations(localFilePath);
@@ -1549,13 +1829,24 @@ int wmain(int argc, wchar_t* argv[]) {
         LONGLONG value = std::stoll(cops.size);
         std::wcout << "Given GUID: " << cops.guid << " Size:  " << value << " Drive: " << physicalDrivePath << std::endl;
         std::wstring partitionName = L"Custom partition";
-        DWORD64 attributes = GPT_BASIC_DATA_ATTRIBUTE_NO_DRIVE_LETTER;
         const GUID PARTITION_BASIC_DATA_GUID = { 0xebd0a0a2, 0xb9e5, 0x4433, 0x87, 0xc0, 0x68, 0xb6, 0xb7, 0x26, 0x99, 0xc7 };
-        bool result = CreateGptPartition(physicalDrivePath, value, inputGuid, partitionName, attributes, PARTITION_BASIC_DATA_GUID);
-        std::wcout << "Result of creating : " << result << std::endl;
+        GUID partitionGuidType;
+        if (cops.partitionGuidType == L"-1") {
+            partitionGuidType = PARTITION_BASIC_DATA_GUID;
+            std::wcout << "No partition GUID Type provided will use partition with Type PARTITION_BASIC_DATA_GUID: " << std::endl;
+        }
+        else {
+            partitionGuidType = StringToGUID(cops.partitionGuidType);
+        }
+        DWORD64 attributes = GPT_BASIC_DATA_ATTRIBUTE_NO_DRIVE_LETTER;
+        
+        //const GUID BP_GUID = {0x44b5e3ea, 0xee29, 0x4e0a, { 0xaf, 0x8b, 0x83, 0x03, 0x19, 0x21, 0x02, 0xcf }};
+        std::wcout << "Creating partition with GUID Type : " << GUIDToString(partitionGuidType) << std::endl;
+        bool result = CreateGptPartition(physicalDrivePath, value, inputGuid, partitionName, attributes, partitionGuidType);
+        std::wcout << "Partition creation result: " << result << std::endl;
 
         int readWrite = std::stoi(cops.readWrite);
-        GetPartitionInfoFromPhysicalPath(physicalDrivePath, readWrite);
+        //GetPartitionInfoFromPhysicalPath(physicalDrivePath, readWrite);
 
         return 0;
     }
@@ -1581,23 +1872,26 @@ int wmain(int argc, wchar_t* argv[]) {
         hr = GetDiskPartitions(physicalDrivePath, &layoutInfo);
         if (hr == S_OK && layoutInfo->PartitionCount == 0) {
             const GUID PARTITION_MSFT_RESERVED_GUID = { 0xe3c9e316, 0x0b5c, 0x4db8, 0x81, 0x7d, 0xf9, 0x2d, 0xf0, 0x02, 0x15, 0xae };
-
+            GUID partitionGuidType;
+            if (cops.partitionGuidType != L"-1") {
+                partitionGuidType = PARTITION_MSFT_RESERVED_GUID;
+                std::wcout << "No partition GUID Type provided will use partition with Type PARTITION_MSFT_RESERVED_GUID: " << std::endl;
+            }
+            //DWORD64 attributes = GPT_BASIC_DATA_ATTRIBUTE_NO_DRIVE_LETTER;
             const LONGLONG MSFT_RESERVED = 16777216;
             std::wstring PARTITION_MSFT_RESERVED_STR = L"Microsoft reserved partition";
             DWORD64 attributes = 0;
             GUID inputGuid;
             hr = GetANewGuid(inputGuid);
 
-            std::wcout << "Creating reserved partition with GUID: " 
-                << GUIDToString(PARTITION_MSFT_RESERVED_GUID) 
-                << " Size:  " << MSFT_RESERVED << " Drive: " << physicalDrivePath << std::endl;
+            std::wcout << "Creating reserved partition with GUID: " << GUIDToString(partitionGuidType) << " Size:  " << MSFT_RESERVED << " Drive: " << physicalDrivePath << std::endl;
             bool result = CreateGptPartition(
                 physicalDrivePath, 
                 MSFT_RESERVED, 
                 inputGuid,
                 PARTITION_MSFT_RESERVED_STR,
                 attributes,
-                PARTITION_MSFT_RESERVED_GUID);
+                partitionGuidType);
 
         }
         //const GUID inputGuid = {0x44B59590, 0xEE00, 0x400A, {0x09, 0x80, 0x83, 0x03, 0x19, 0x21, 0x02, 0x0F}};
@@ -1647,7 +1941,7 @@ int wmain(int argc, wchar_t* argv[]) {
         return 0;
     }*/
     
-    cops.listDrives = L"1";
+    //cops.listDrives = L"1";
     if (cops.listDrives == L"1") {
         std::wcout << "Listing Drives information : " << std::endl;
         std::vector<std::wstring> physicalDrivePaths;
@@ -1666,7 +1960,7 @@ int wmain(int argc, wchar_t* argv[]) {
         }
         std::wcout << "Completed list drives : " << std::endl;
     }
-    cops.listPartitions = L"1";
+    //cops.listPartitions = L"1";
     if (cops.listPartitions == L"1" && cops.driveNo != L"-1") {
         std::wstring physicalDrivePath = L"\\\\.\\PHYSICALDRIVE" + cops.driveNo;
         std::wcout << "Input physical drive " << cops.driveNo << " Physical drive path  " << physicalDrivePath << std::endl;
